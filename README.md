@@ -22,9 +22,11 @@ This demo showcases [Firebolt Core's](https://github.com/firebolt-db/firebolt-co
 ### Step 1: Setup Firebolt Core (2 minutes)
 
 ```bash
-# Clone and enter the project
-git clone <this-repo>
+# Move to proper directory
 cd firebolt-nyc-demo
+
+# Make setup scripts executable
+chmod +x setup_core.sh load_data.sh check_status.sh cleanup.sh
 
 # Start Firebolt Core database
 ./setup_core.sh
@@ -111,46 +113,7 @@ Removes all containers, data, and virtual environment for a fresh start.
 ```
 Drops and reloads the violations table with fresh data from S3.
 
-## 📊 Dataset Details
 
-**NYC Parking Violations Dataset**
-- **Source**: NYC Open Data via Firebolt Sample Datasets
-- **Total Records**: 21,563,502 violations
-- **Date Range**: 1972-2024 (primarily 2019-2023)
-- **Size**: ~500MB compressed, ~2GB uncompressed
-- **Performance**: Sub-second queries on 21.5M rows
-
-**Key Fields**:
-- Summons number, plate info, violation details
-- Issue date, street location, vehicle make
-- Violation codes with realistic fine amounts
-- Geographic data for NYC-specific analysis
-
-## 🚀 Why is Firebolt Core So Fast?
-
-### Advanced Indexing
-- **Sparse Indexes**: Lightning-fast filtering on dates and locations
-- **Primary Index**: Optimized data layout for summons lookups
-- **Multi-column Indexes**: Complex queries execute in milliseconds
-
-### Engine Optimizations
-- **Vectorized Processing**: SIMD-accelerated computations
-- **Columnar Storage**: Read only the data you need
-- **Intelligent Caching**: Hot data stays in memory
-- **Query Optimization**: Cost-based optimization with predicate pushdown
-
-### Real Performance Examples
-```sql
--- This query executes in ~150ms on 21.5M rows:
-SELECT street_name, COUNT(*), AVG(calculated_fine_amount) 
-FROM violations 
-WHERE vehicle_make = 'HONDA' 
-  AND calculated_fine_amount BETWEEN 60 AND 80
-  AND issue_date >= '2023-01-01'
-GROUP BY street_name 
-ORDER BY COUNT(*) DESC 
-LIMIT 10;
-```
 
 ## 🐛 Troubleshooting
 
@@ -215,7 +178,7 @@ docker exec firebolt-core fb -C -c "SELECT COUNT(*) FROM violations"
 ```bash
 # Check query performance
 docker exec firebolt-core fb -C -c "
-SELECT 
+SELECT
     COUNT(*) as total_violations,
     AVG(calculated_fine_amount) as avg_fine,
     COUNT(DISTINCT street_name) as unique_streets
@@ -226,8 +189,8 @@ FROM violations"
 ```bash
 # Export to CSV
 docker exec firebolt-core fb -C -c "
-SELECT * FROM violations 
-WHERE issue_date >= '2023-01-01' 
+SELECT * FROM violations
+WHERE issue_date >= '2023-01-01'
 LIMIT 1000" -f CSV > sample_data.csv
 ```
 
@@ -245,15 +208,3 @@ LIMIT 1000" -f CSV > sample_data.csv
 - [Firebolt SQL Reference](https://docs.firebolt.io/sql_reference/)
 - [GitHub Repository](https://github.com/firebolt-db/firebolt-core)
 - [Community Discord](https://discord.gg/UpMPDHActM)
-
-## 📄 License
-
-This demo is open source under the MIT License.
-
----
-
-**🎯 Ready to experience sub-second analytics on 21.5M records?**
-
-**Just run**: `./setup_core.sh` → `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt` → `./load_data.sh` → `streamlit run app/streamlit_app.py`
-
-**Open**: http://localhost:8501 and explore! 
