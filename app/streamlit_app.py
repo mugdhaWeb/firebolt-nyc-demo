@@ -257,7 +257,7 @@ def get_firebolt_connector():
 
 # Cache filter data for performance
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_filter_data(connector: FireboltConnector) -> Dict:
+def get_filter_data(_connector: FireboltConnector) -> Dict:
     """Get all filter data in one go and cache it."""
     
     # Get all filter data efficiently
@@ -269,7 +269,7 @@ def get_filter_data(connector: FireboltConnector) -> Dict:
     
     # Get streets
     try:
-        df, _, success = connector.execute_query("SELECT DISTINCT street_name FROM violations WHERE street_name IS NOT NULL AND street_name != '' ORDER BY street_name LIMIT 1000")
+        df, _, success = _connector.execute_query("SELECT DISTINCT street_name FROM violations WHERE street_name IS NOT NULL AND street_name != '' ORDER BY street_name LIMIT 1000")
         if success and not df.empty:
             filter_data['streets'] = df['street_name'].tolist()
     except Exception as e:
@@ -277,7 +277,7 @@ def get_filter_data(connector: FireboltConnector) -> Dict:
     
     # Get amounts
     try:
-        df, _, success = connector.execute_query("SELECT DISTINCT calculated_fine_amount FROM violations WHERE calculated_fine_amount IS NOT NULL AND calculated_fine_amount > 0 ORDER BY calculated_fine_amount LIMIT 1000")
+        df, _, success = _connector.execute_query("SELECT DISTINCT calculated_fine_amount FROM violations WHERE calculated_fine_amount IS NOT NULL AND calculated_fine_amount > 0 ORDER BY calculated_fine_amount LIMIT 1000")
         if success and not df.empty:
             filter_data['amounts'] = df['calculated_fine_amount'].tolist()
     except Exception as e:
@@ -285,7 +285,7 @@ def get_filter_data(connector: FireboltConnector) -> Dict:
     
     # Get cars
     try:
-        df, _, success = connector.execute_query("""
+        df, _, success = _connector.execute_query("""
             SELECT vehicle_make
             FROM violations 
             WHERE vehicle_make IS NOT NULL 
@@ -319,9 +319,9 @@ def get_available_cars(connector: FireboltConnector) -> List[str]:
     return filter_data.get('cars', [])
 
 @st.cache_data(ttl=60)  # Cache for 1 minute
-def get_sample_data(connector: FireboltConnector) -> tuple:
+def get_sample_data(_connector: FireboltConnector) -> tuple:
     """Get sample data for the data browser."""
-    df, exec_time, success = connector.execute_query("SELECT summons_number, plate_id, registration_state, issue_date, vehicle_make, street_name, calculated_fine_amount FROM violations ORDER BY issue_date DESC LIMIT 100")
+    df, exec_time, success = _connector.execute_query("SELECT summons_number, plate_id, registration_state, issue_date, vehicle_make, street_name, calculated_fine_amount FROM violations ORDER BY issue_date DESC LIMIT 100")
     return df, exec_time, success
 
 def show_data_browser(connector: FireboltConnector):
