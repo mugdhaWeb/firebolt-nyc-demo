@@ -255,28 +255,35 @@ class FireboltConnector:
 def get_firebolt_connector():
     return FireboltConnector()
 
-def get_available_streets(connector: FireboltConnector) -> List[str]:
-    """Get list of available street names from the database."""
+# Cache filter data for performance
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_filter_data(connector: FireboltConnector) -> Dict:
+    """Get all filter data in one go and cache it."""
+    
+    # Get all filter data efficiently
+    filter_data = {
+        'streets': [],
+        'amounts': [],
+        'cars': []
+    }
+    
+    # Get streets
     try:
-        df, _, success = connector.execute_query("SELECT DISTINCT street_name FROM violations WHERE street_name IS NOT NULL ORDER BY street_name LIMIT 1000")
+        df, _, success = connector.execute_query("SELECT DISTINCT street_name FROM violations WHERE street_name IS NOT NULL AND street_name != '' ORDER BY street_name LIMIT 1000")
         if success and not df.empty:
-            return df['street_name'].tolist()
+            filter_data['streets'] = df['street_name'].tolist()
     except Exception as e:
         logger.error(f"Error fetching streets: {e}")
-    return []
-
-def get_available_amounts(connector: FireboltConnector) -> List[float]:
-    """Get list of available fine amounts from the database."""
+    
+    # Get amounts
     try:
-        df, _, success = connector.execute_query("SELECT DISTINCT calculated_fine_amount FROM violations WHERE calculated_fine_amount IS NOT NULL ORDER BY calculated_fine_amount LIMIT 1000")
+        df, _, success = connector.execute_query("SELECT DISTINCT calculated_fine_amount FROM violations WHERE calculated_fine_amount IS NOT NULL AND calculated_fine_amount > 0 ORDER BY calculated_fine_amount LIMIT 1000")
         if success and not df.empty:
-            return df['calculated_fine_amount'].tolist()
+            filter_data['amounts'] = df['calculated_fine_amount'].tolist()
     except Exception as e:
         logger.error(f"Error fetching amounts: {e}")
-    return []
-
-def get_available_cars(connector: FireboltConnector) -> List[str]:
-    """Get list of available vehicle makes from the database."""
+    
+    # Get cars
     try:
         df, _, success = connector.execute_query("""
             SELECT vehicle_make
@@ -290,15 +297,37 @@ def get_available_cars(connector: FireboltConnector) -> List[str]:
             LIMIT 50
         """)
         if success and not df.empty:
-            return df['vehicle_make'].tolist()
+            filter_data['cars'] = df['vehicle_make'].tolist()
     except Exception as e:
         logger.error(f"Error fetching cars: {e}")
-    return []
+    
+    return filter_data
+
+def get_available_streets(connector: FireboltConnector) -> List[str]:
+    """Get list of available street names from the database."""
+    filter_data = get_filter_data(connector)
+    return filter_data.get('streets', [])
+
+def get_available_amounts(connector: FireboltConnector) -> List[float]:
+    """Get list of available fine amounts from the database."""
+    filter_data = get_filter_data(connector)
+    return filter_data.get('amounts', [])
+
+def get_available_cars(connector: FireboltConnector) -> List[str]:
+    """Get list of available vehicle makes from the database."""
+    filter_data = get_filter_data(connector)
+    return filter_data.get('cars', [])
+
+@st.cache_data(ttl=60)  # Cache for 1 minute
+def get_sample_data(connector: FireboltConnector) -> tuple:
+    """Get sample data for the data browser."""
+    df, exec_time, success = connector.execute_query("SELECT summons_number, plate_id, registration_state, issue_date, vehicle_make, street_name, calculated_fine_amount FROM violations ORDER BY issue_date DESC LIMIT 100")
+    return df, exec_time, success
 
 def show_data_browser(connector: FireboltConnector):
     """Display the current data in the violations table."""
     try:
-        df, exec_time, success = connector.execute_query("SELECT summons_number, plate_id, registration_state, issue_date, vehicle_make, street_name, calculated_fine_amount FROM violations ORDER BY issue_date DESC LIMIT 100")
+        df, exec_time, success = get_sample_data(connector)
         
         if success and not df.empty:
             st.dataframe(df, use_container_width=True)
@@ -463,10 +492,15 @@ def main():
     if connector.test_connection():
         st.sidebar.success("✅ Connected to Firebolt Core")
         
+        # Add refresh button for cache
+        if st.sidebar.button("🔄 Refresh Cache", help="Clear cache and reload filter data"):
+            st.cache_data.clear()
+            st.rerun()
+        
         # Sidebar filters (only show if connected)
         st.sidebar.header("🎛️ Query Filters")
         
-        # Get available data for filters
+        # Get available data for filters (cached for performance)
         available_streets = get_available_streets(connector)
         available_amounts = get_available_amounts(connector)
         available_cars = get_available_cars(connector)

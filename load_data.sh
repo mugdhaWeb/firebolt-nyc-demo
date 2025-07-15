@@ -58,5 +58,24 @@ echo ""
 echo "🎉 Data loading completed successfully!"
 echo "📊 Results:"
 echo "$result"
+
+# Discrete warm-up queries (run silently to optimize performance)
+docker exec firebolt-core fb -C -c "SELECT COUNT(*) FROM violations" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT COUNT(DISTINCT street_name) FROM violations WHERE street_name IS NOT NULL" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT COUNT(DISTINCT vehicle_make) FROM violations WHERE vehicle_make IS NOT NULL" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT AVG(calculated_fine_amount) FROM violations WHERE calculated_fine_amount > 0" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT street_name, COUNT(*) FROM violations WHERE street_name IS NOT NULL GROUP BY street_name LIMIT 10" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT vehicle_make, COUNT(*) FROM violations WHERE vehicle_make IS NOT NULL GROUP BY vehicle_make LIMIT 10" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT COUNT(*) as total_violations, SUM(calculated_fine_amount) as total_fines, AVG(calculated_fine_amount) as avg_fine FROM violations WHERE calculated_fine_amount > 0" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT street_name, COUNT(*) as total_violations, SUM(calculated_fine_amount) as total_revenue FROM violations WHERE street_name IS NOT NULL AND calculated_fine_amount > 0 GROUP BY street_name ORDER BY total_revenue DESC LIMIT 5" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT vehicle_make, COUNT(*) as violations, AVG(calculated_fine_amount) as avg_fine FROM violations WHERE vehicle_make IS NOT NULL AND calculated_fine_amount > 0 GROUP BY vehicle_make ORDER BY violations DESC LIMIT 5" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT EXTRACT(YEAR FROM issue_date) as year, COUNT(*) as violation_count FROM violations WHERE issue_date IS NOT NULL GROUP BY EXTRACT(YEAR FROM issue_date) ORDER BY year DESC LIMIT 5" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT DISTINCT street_name FROM violations WHERE street_name IS NOT NULL AND street_name != '' ORDER BY street_name LIMIT 1000" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT DISTINCT calculated_fine_amount FROM violations WHERE calculated_fine_amount IS NOT NULL AND calculated_fine_amount > 0 ORDER BY calculated_fine_amount LIMIT 1000" >/dev/null 2>&1 &
+docker exec firebolt-core fb -C -c "SELECT vehicle_make FROM violations WHERE vehicle_make IS NOT NULL AND LENGTH(vehicle_make) >= 3 AND vehicle_make != '' GROUP BY vehicle_make HAVING COUNT(*) >= 1000 ORDER BY COUNT(*) DESC LIMIT 50" >/dev/null 2>&1 &
+
+# Wait for background warm-up queries to complete
+wait
+
 echo ""
 echo "🚀 You can now run: streamlit run app/streamlit_app.py" 
