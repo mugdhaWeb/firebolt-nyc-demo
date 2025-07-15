@@ -34,6 +34,8 @@ chmod +x setup_core.sh load_data.sh check_status.sh cleanup.sh
 
 **✅ Wait for**: "Firebolt Core is ready!" message
 
+Open a seperate terminal
+
 ### Step 2: Setup Python Environment (2 minutes)
 
 ```bash

@@ -100,6 +100,19 @@ class FireboltConnector:
                 # Parse JSON output
                 if result.stdout.strip():
                     df = self._parse_jsonlines_output(result.stdout)
+                    # Fallback: if JSON parse yielded empty DF, retry with CSV format
+                    if df.empty:
+                        csv_cmd = [
+                            "docker", "exec", self.container_name,
+                            "fb", "-C", "-c", query, "-f", "CSV"
+                        ]
+                        csv_result = subprocess.run(csv_cmd, capture_output=True, text=True, timeout=timeout)
+                        if csv_result.returncode == 0 and csv_result.stdout.strip():
+                            import io
+                            try:
+                                df = pd.read_csv(io.StringIO(csv_result.stdout))
+                            except Exception:
+                                df = pd.DataFrame()
                     return df, execution_time, True
                 else:
                     return pd.DataFrame(), execution_time, True
@@ -307,7 +320,7 @@ def show_data_browser(connector: FireboltConnector):
 
 
 
-# Benchmark queries - updated for violations table
+# Benchmark queries - updated for violations table with filter support
 BENCHMARK_QUERIES = {
     "Q1": {
         "name": "Total violations & fines summary",
@@ -321,6 +334,9 @@ BENCHMARK_QUERIES = {
                 MAX(calculated_fine_amount) as max_fine
             FROM violations 
             WHERE calculated_fine_amount > 0
+                {street_filter}
+                {amount_filter}
+                {car_filter}
         """
     },
     "Q2": {
@@ -336,6 +352,9 @@ BENCHMARK_QUERIES = {
             WHERE street_name IS NOT NULL 
                 AND street_name != ''
                 AND calculated_fine_amount > 0
+                {street_filter}
+                {amount_filter}
+                {car_filter}
             GROUP BY street_name
             ORDER BY total_revenue DESC
             LIMIT 10
@@ -353,6 +372,9 @@ BENCHMARK_QUERIES = {
             FROM violations 
             WHERE vehicle_make IS NOT NULL 
                 AND calculated_fine_amount > 0
+                {street_filter}
+                {amount_filter}
+                {car_filter}
             GROUP BY vehicle_make
             ORDER BY violations DESC
             LIMIT 10
@@ -371,6 +393,9 @@ BENCHMARK_QUERIES = {
             WHERE issue_date IS NOT NULL 
                 AND calculated_fine_amount > 0
                 AND EXTRACT(YEAR FROM issue_date) BETWEEN 2010 AND 2024
+                {street_filter}
+                {amount_filter}
+                {car_filter}
             GROUP BY EXTRACT(YEAR FROM issue_date)
             ORDER BY year
         """
@@ -401,6 +426,15 @@ BENCHMARK_QUERIES = {
     }
 }
 
+# Sample query templates for the custom query feature
+SAMPLE_QUERIES = [
+    "SELECT COUNT(*) as total_violations FROM violations",
+    "SELECT street_name, COUNT(*) as violations FROM violations GROUP BY street_name ORDER BY violations DESC LIMIT 10",
+    "SELECT vehicle_make, AVG(calculated_fine_amount) as avg_fine FROM violations GROUP BY vehicle_make ORDER BY avg_fine DESC LIMIT 10",
+    "SELECT EXTRACT(YEAR FROM issue_date) as year, COUNT(*) as violations FROM violations GROUP BY EXTRACT(YEAR FROM issue_date) ORDER BY year",
+    "SELECT registration_state, COUNT(*) as violations FROM violations GROUP BY registration_state ORDER BY violations DESC LIMIT 10"
+]
+
 def main():
     """Main Streamlit app."""
     
@@ -409,8 +443,8 @@ def main():
     st.markdown("""
     **Explore 21.5+ million NYC parking violations with sub-second analytics!**
     
-    This demo showcases Firebolt Core's high-performance query engine with real NYC open data loaded from S3.
-    The dataset contains actual NYC parking violations from 1972-2024.
+    This demo showcases Firebolt Core's high-performance query engine with sample NYC parking violation data loaded from S3.
+    The dataset contains sample parking violation records for demonstration purposes.
     """)
     
     # Initialize session state
@@ -418,6 +452,10 @@ def main():
         st.session_state.running = False
     if 'query_results' not in st.session_state:
         st.session_state.query_results = {}
+    if 'latest_query' not in st.session_state:
+        st.session_state.latest_query = None
+    if 'query_execution_order' not in st.session_state:
+        st.session_state.query_execution_order = []
     
     # Connection status
     connector = get_firebolt_connector()
@@ -484,7 +522,7 @@ def main():
             st.rerun()
         
         # Auto-refresh filtered query when filters change
-        if st.sidebar.button("🚀 Apply Filters (Run Q5)", type="primary"):
+        if st.sidebar.button("🚀 Apply Filters", type="primary"):
             execute_benchmark_query("Q5", BENCHMARK_QUERIES["Q5"], connector, 
                                   street_filter, amount_range, car_filter)
             
@@ -550,7 +588,7 @@ def main():
         st.stop()
     
     # Main tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["🏃 Run Benchmarks", "📊 Visualizations", "🔍 Browse Data", "🧠 Why So Fast?"])
+    tab1, tab2, tab3 = st.tabs(["🏃 Run Benchmarks", "📊 Visualizations", "🔍 Browse Data"])
     
     with tab1:
         st.header("Benchmark Queries")
@@ -565,7 +603,8 @@ def main():
                 if car_filter:
                     st.markdown(f"- **Vehicle Make:** {car_filter}")
                 st.markdown(f"- **Fine Amount Range:** ${amount_range[0]:.0f} - ${amount_range[1]:.0f}")
-                st.info("💡 Use **Q5: Interactive data filtering** to see filtered results!")
+        
+
         
         # Create columns for benchmark buttons
         cols = st.columns(3)
@@ -579,31 +618,147 @@ def main():
                     execute_benchmark_query(query_id, query_info, connector, 
                                           street_filter, amount_range, car_filter)
         
+        # Custom query toggle button (placed next to Q5)
+        st.markdown("---")
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.subheader("💻 Custom Query")
+        
+        with col2:
+            # Initialize session state for custom query visibility
+            if 'show_custom_query' not in st.session_state:
+                st.session_state.show_custom_query = False
+            
+            if st.button("🔧 Toggle Custom Query", key="toggle_custom_query"):
+                st.session_state.show_custom_query = not st.session_state.show_custom_query
+        
+        # Show custom query section if toggled on
+        if st.session_state.show_custom_query:
+            # Query input area
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                # Initialize session state for custom query
+                if 'custom_query_input' not in st.session_state:
+                    st.session_state.custom_query_input = ""
+                
+                custom_sql = st.text_area(
+                    "Enter your custom SQL query:",
+                    value=st.session_state.custom_query_input,
+                    height=100,
+                    placeholder="SELECT * FROM violations WHERE street_name = 'Broadway' LIMIT 10",
+                    help="Write any SQL query. Optionally apply current filters."
+                )
+                
+                # Sample queries dropdown
+                sample_query = st.selectbox(
+                    "Or choose a sample query:",
+                    options=[""] + SAMPLE_QUERIES,
+                    help="Select a sample query to get started"
+                )
+                
+                if sample_query:
+                    custom_sql = sample_query
+                    st.session_state.custom_query_input = sample_query
+                
+                # Filter application checkbox
+                apply_filters = st.checkbox(
+                    "Apply current filters to this query",
+                    value=False,
+                    help="Check this to apply street, car, and amount filters to your custom query"
+                )
+            
+            with col2:
+                st.write("**Query Tools:**")
+                
+                if st.button("🚀 Execute Query", type="primary", disabled=not custom_sql.strip()):
+                    if custom_sql.strip():
+                        execute_custom_query(connector, custom_sql, apply_filters, street_filter, amount_range, car_filter)
+                        st.session_state.custom_query_input = custom_sql
+                
+                if st.button("🔄 Clear Results"):
+                    st.session_state.query_results = {}
+                    st.session_state.latest_query = None
+                    st.session_state.query_execution_order = []
+                    st.success("All results cleared!")
+                
+                if st.button("📋 Clear Query"):
+                    st.session_state.custom_query_input = ""
+                    st.rerun()
+        else:
+            pass  # Custom query section is hidden
+        
+        # Show query stats
+        if st.session_state.query_results:
+            st.info(f"📊 **Total queries executed:** {len(st.session_state.query_results)}")
+        else:
+            st.info("*No queries executed yet*")
+        
         # Display results table
         if st.session_state.query_results:
             st.subheader("📈 Execution Results")
             
             results_data = []
             for query_id, result in st.session_state.query_results.items():
+                # Handle both regular queries and custom queries
+                if query_id.startswith("CQ_"):
+                    description = result.get('name', 'Custom Query')
+                else:
+                    description = BENCHMARK_QUERIES.get(query_id, {}).get("name", "Unknown Query")
+                
                 results_data.append({
                     "Query": query_id,
-                    "Description": BENCHMARK_QUERIES[query_id]["name"],
+                    "Description": description,
                     "Execution Time (ms)": f"{result['execution_time']*1000:.1f}",
                     "Rows Returned": result['row_count'],
-                    "Status": "✅ Success" if result['success'] else "❌ Failed"
+                    "Status": "✅ Success" if result['success'] else "❌ Failed",
+                    "Timestamp": result['timestamp'].strftime("%H:%M:%S")
                 })
             
+            # Sort by execution order (most recent first)
+            results_data.sort(key=lambda x: x['Timestamp'], reverse=True)
             results_df = pd.DataFrame(results_data)
             st.dataframe(results_df, use_container_width=True)
             
-            # Show latest query result
-            if results_data:
-                latest_query = list(st.session_state.query_results.keys())[-1]
+            # Show latest query result using proper tracking
+            if st.session_state.latest_query and st.session_state.latest_query in st.session_state.query_results:
+                latest_query = st.session_state.latest_query
                 latest_result = st.session_state.query_results[latest_query]
                 
-                st.subheader(f"Latest Query Results: {latest_query}")
-                if not latest_result['data'].empty:
+                # Get the query name for display
+                if latest_query.startswith("CQ_"):
+                    query_name = latest_result.get('name', 'Custom Query')
+                else:
+                    query_name = BENCHMARK_QUERIES.get(latest_query, {}).get("name", "Unknown Query")
+                
+                st.subheader(f"📊 Latest Query Results: {latest_query}")
+                st.markdown(f"**Query:** {query_name}")
+                st.markdown(f"**Executed at:** {latest_result['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                st.markdown(f"**Execution time:** {latest_result['execution_time']*1000:.1f}ms")
+                st.markdown(f"**Rows returned:** {latest_result['row_count']}")
+                
+                # Show SQL for custom queries
+                if latest_query.startswith("CQ_"):
+                    if latest_result.get('filters_applied') and latest_result.get('original_sql'):
+                        st.markdown("**Original SQL:**")
+                        st.code(latest_result['original_sql'], language='sql')
+                        st.markdown("**Executed SQL (with filters):**")
+                        st.code(latest_result['sql'], language='sql')
+                    else:
+                        st.markdown("**Executed SQL:**")
+                        st.code(latest_result['sql'], language='sql')
+                
+                if latest_result['success'] and not latest_result['data'].empty:
                     st.dataframe(latest_result['data'], use_container_width=True)
+                elif latest_result['success'] and latest_result['data'].empty:
+                    st.info("Query executed successfully but returned no results.")
+                    if latest_query.startswith("CQ_") and latest_result.get('filters_applied'):
+                        st.info("💡 **Tip:** Try unchecking 'Apply current filters' if you're getting no results.")
+                else:
+                    st.error("Query failed to execute.")
+            else:
+                st.info("No queries executed yet. Click any query button above to start!")
     
     with tab2:
         st.header("Data Visualizations")
@@ -634,9 +789,10 @@ def main():
         st.subheader("🔍 Current Data in violations Table")
         
         if st.button("🔄 Refresh Data", help="Reload data from the database"):
-            show_data_browser(connector)
-        
-        # Show initial data
+            # Trigger a rerun to ensure fresh data only (Streamlit 1.30+)
+            st.rerun()
+
+        # Always show the latest data (single call)
         show_data_browser(connector)
         
         # Data information section
@@ -647,86 +803,38 @@ def main():
         with col1:
             st.markdown("**Dataset Details:**")
             st.info("""
-            - **Source**: NYC Open Data via Firebolt Sample Datasets
+            - **Source**: Sample NYC parking violation dataset
             - **Total Records**: 21,563,502 violations
-            - **Date Range**: 1972-2024 (with data quality issues)
+            - **Format**: Parquet files optimized for analytics
             - **Size**: ~500MB compressed parquet files
             - **Location**: S3 bucket (public access)
             """)
         
-        with col2:
-            st.markdown("**Quick Stats:**")
-            if st.button("📈 Run Quick Stats", type="secondary"):
-                with st.spinner("Calculating statistics..."):
-                    stats_df, exec_time, success = connector.execute_query("""
-                        SELECT 
-                            COUNT(*) as total_violations,
-                            COUNT(DISTINCT street_name) as unique_streets,
-                            COUNT(DISTINCT vehicle_make) as unique_makes,
-                            AVG(calculated_fine_amount) as avg_fine
-                        FROM violations 
-                        WHERE calculated_fine_amount > 0
-                    """)
-                    if success and not stats_df.empty:
-                        st.success(f"Stats calculated in {exec_time*1000:.1f}ms")
-                        st.dataframe(stats_df, use_container_width=True)
-                    else:
-                        st.error("Failed to calculate statistics")
-    
-    with tab4:
-        st.header("Why is Firebolt Core So Fast?")
-        
-        with st.expander("🔍 Query Execution Plans", expanded=True):
-            explain_performance(connector)
-        
-        with st.expander("🚀 Performance Features", expanded=True):
-            st.markdown("""
-            ### Firebolt Core's Speed Secrets:
-            
-            1. **🎯 Sparse Indexes**: Smart indexing on frequently-filtered columns
-               - Issue date index accelerates time-based queries
-               - Street name index speeds up location filtering
-            
-            2. **📊 Aggregating Indexes**: Pre-computed aggregations
-               - Daily statistics calculated once, queried instantly  
-               - Hourly patterns materialized for real-time analysis
-            
-            3. **⚡ Vectorized Engine**: SIMD-optimized processing
-               - Process multiple rows simultaneously
-               - Efficient memory utilization
-            
-            4. **🗜️ Columnar Storage**: Optimized data layout
-               - Only read columns you need
-               - Better compression ratios
-            
-            5. **🔧 Advanced Query Optimizer**: 
-               - Cost-based optimization
-               - Predicate pushdown
-               - Join reordering
-            """)
+
 
 def execute_benchmark_query(query_id: str, query_info: Dict, connector: FireboltConnector, 
                           street_filter: str, amount_range: tuple, car_filter: str = ""):
     """Execute a benchmark query with timing."""
     
     with st.spinner(f"Executing {query_id}..."):
-        # Prepare query with filters for Q5
+        # Prepare query with filters for ALL queries
         sql = query_info["sql"]
-        if query_id == "Q5":
-            street_clause = f"AND street_name = '{street_filter}'" if street_filter else ""
-            amount_clause = f"AND calculated_fine_amount BETWEEN {amount_range[0]} AND {amount_range[1]}"
-            car_clause = f"AND vehicle_make = '{car_filter}'" if car_filter else ""
-            
-            sql = sql.format(
-                street_filter=street_clause,
-                amount_filter=amount_clause,
-                car_filter=car_clause
-            )
+        
+        # Apply filters to all queries
+        street_clause = f"AND street_name = '{street_filter}'" if street_filter else ""
+        amount_clause = f"AND calculated_fine_amount BETWEEN {amount_range[0]} AND {amount_range[1]}"
+        car_clause = f"AND vehicle_make = '{car_filter}'" if car_filter else ""
+        
+        sql = sql.format(
+            street_filter=street_clause,
+            amount_filter=amount_clause,
+            car_filter=car_clause
+        )
         
         # Execute query
         result_df, execution_time, success = connector.execute_query(sql)
         
-        # Store results
+        # Store results and update latest query tracking
         st.session_state.query_results[query_id] = {
             'data': result_df,
             'execution_time': execution_time,
@@ -735,134 +843,228 @@ def execute_benchmark_query(query_id: str, query_info: Dict, connector: Firebolt
             'timestamp': datetime.now()
         }
         
+        # Update latest query and execution order
+        st.session_state.latest_query = query_id
+        if query_id in st.session_state.query_execution_order:
+            st.session_state.query_execution_order.remove(query_id)
+        st.session_state.query_execution_order.append(query_id)
+        
         if success:
             st.success(f"✅ {query_id} completed in {execution_time*1000:.1f}ms")
         else:
             st.error(f"❌ {query_id} failed")
+
+
+def execute_custom_query(connector: FireboltConnector, custom_sql: str, apply_filters: bool, street_filter: str, amount_range: tuple, car_filter: str = ""):
+    """Execute a custom user query with optional filters."""
+    query_id = f"CQ_{int(time.time())}"  # Unique ID for custom query
+    
+    with st.spinner("Executing custom query..."):
+        # Prepare query with filters if requested
+        sql = custom_sql.strip()
+        original_sql = custom_sql.strip()
+        
+        # Only apply filters if explicitly requested and the query references violations table
+        if apply_filters and 'violations' in sql.lower():
+            # Simple approach: add WHERE clause or extend existing WHERE clause
+            if street_filter or car_filter or amount_range != (0.0, 200.0):
+                conditions = []
+                
+                if street_filter:
+                    conditions.append(f"street_name = '{street_filter}'")
+                if car_filter:
+                    conditions.append(f"vehicle_make = '{car_filter}'")
+                if amount_range != (0.0, 200.0):
+                    conditions.append(f"calculated_fine_amount BETWEEN {amount_range[0]} AND {amount_range[1]}")
+                
+                if conditions:
+                    filter_clause = " AND ".join(conditions)
+                    
+                    # Simple logic: if query has WHERE, add AND conditions, otherwise add WHERE
+                    if ' WHERE ' in sql.upper() or ' where ' in sql:
+                        sql = sql.rstrip(';') + f" AND ({filter_clause})"
+                    else:
+                        sql = sql.rstrip(';') + f" WHERE {filter_clause}"
+        
+
+        
+        # Execute query
+        result_df, execution_time, success = connector.execute_query(sql)
+        
+
+        
+        # Store results
+        st.session_state.query_results[query_id] = {
+            'data': result_df,
+            'execution_time': execution_time,
+            'row_count': len(result_df) if success else 0,
+            'success': success,
+            'timestamp': datetime.now(),
+            'name': 'Custom Query',  # Store the template name
+            'sql': sql,  # Store the actual SQL executed
+            'original_sql': original_sql,  # Store the original SQL
+            'filters_applied': apply_filters
+        }
+        
+        # Update latest query and execution order
+        st.session_state.latest_query = query_id
+        if query_id in st.session_state.query_execution_order:
+            st.session_state.query_execution_order.remove(query_id)
+        st.session_state.query_execution_order.append(query_id)
+        
+        if success:
+            st.success(f"✅ Custom query completed in {execution_time*1000:.1f}ms")
+            if apply_filters and sql != original_sql:
+                st.info(f"🔍 Filters were applied to your query")
+        else:
+            st.error("❌ Custom query failed")
+        
+        return query_id
 
 def create_visualizations():
     """Create visualizations from query results."""
     
     visualizations_shown = 0
     
-    # Overall statistics (Q1)
-    if "Q1" in st.session_state.query_results:
-        q1_data = st.session_state.query_results["Q1"]["data"]
-        if not q1_data.empty and len(q1_data) > 0:
-            st.subheader("📊 Overall Statistics")
+    # Show all available visualizations from most recent to oldest
+    if not st.session_state.query_results:
+        st.info("🚀 Run some benchmark queries first to see visualizations!")
+        return
+    
+    # Sort query results by timestamp (most recent first)
+    sorted_results = sorted(
+        st.session_state.query_results.items(),
+        key=lambda x: x[1]['timestamp'],
+        reverse=True
+    )
+    
+    for query_id, result in sorted_results:
+        data = result['data']
+        if data.empty or not result['success']:
+            continue
             
-            # Show metrics as cards with null checks
+        # Get query name for display
+        if query_id.startswith("CQ_"):
+            query_name = result.get('name', 'Custom Query')
+        else:
+            query_name = BENCHMARK_QUERIES.get(query_id, {}).get("name", "Unknown Query")
+        
+        # Create appropriate visualization based on data structure
+        st.subheader(f"📊 {query_name} ({query_id})")
+        st.markdown(f"*Executed at: {result['timestamp'].strftime('%H:%M:%S')} | Execution time: {result['execution_time']*1000:.1f}ms*")
+        
+        # Overall statistics (Q1 and similar)
+        if 'total_violations' in data.columns and len(data) == 1:
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                violations = q1_data.iloc[0]['total_violations']
+                violations = data.iloc[0]['total_violations']
                 st.metric("Total Violations", f"{int(violations):,}" if violations is not None else "N/A")
             with col2:
-                fines = q1_data.iloc[0]['total_fines']
+                fines = data.iloc[0].get('total_fines', 0)
                 st.metric("Total Fines", f"${float(fines):,.2f}" if fines is not None else "N/A")
             with col3:
-                avg_fine = q1_data.iloc[0]['avg_fine']
+                avg_fine = data.iloc[0].get('avg_fine', 0)
                 st.metric("Average Fine", f"${float(avg_fine):.2f}" if avg_fine is not None else "N/A")
             with col4:
-                min_fine = q1_data.iloc[0]['min_fine']
-                max_fine = q1_data.iloc[0]['max_fine']
+                min_fine = data.iloc[0].get('min_fine', 0)
+                max_fine = data.iloc[0].get('max_fine', 0)
                 if min_fine is not None and max_fine is not None:
                     st.metric("Fine Range", f"${float(min_fine):.0f} - ${float(max_fine):.0f}")
                 else:
                     st.metric("Fine Range", "N/A")
-            
             visualizations_shown += 1
-    
-    # Street revenue breakdown (Q2)
-    if "Q2" in st.session_state.query_results:
-        q2_data = st.session_state.query_results["Q2"]["data"]
-        if not q2_data.empty and len(q2_data) > 0:
-            st.subheader("💰 Revenue by Street")
-            
-            # Create bar chart
+        
+        # Street revenue breakdown (Q2 and similar)
+        elif 'street_name' in data.columns and 'total_revenue' in data.columns:
             fig = px.bar(
-                q2_data, 
+                data, 
                 x='street_name', 
                 y='total_revenue',
                 color='avg_fine',
-                title="Total Revenue by Street",
+                title=f"{query_name} - Revenue by Street",
                 labels={'total_revenue': 'Total Revenue ($)', 'street_name': 'Street Name', 'avg_fine': 'Avg Fine ($)'},
                 color_continuous_scale='viridis'
             )
-            fig.update_layout(height=400)
+            fig.update_layout(height=400, xaxis_tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Show data table
-            st.dataframe(q2_data, use_container_width=True)
-            
             visualizations_shown += 1
-    
-    # Vehicle make analysis (Q3)
-    if "Q3" in st.session_state.query_results:
-        q3_data = st.session_state.query_results["Q3"]["data"]
-        if not q3_data.empty and len(q3_data) > 0:
-            st.subheader("📈 Vehicle Make Analysis")
-            
+        
+        # Vehicle make analysis (Q3 and similar)
+        elif 'vehicle_make' in data.columns and 'violations' in data.columns:
             fig = px.bar(
-                q3_data,
+                data,
                 x='vehicle_make',
                 y='avg_fine',
                 color='violations',
-                title="Average Fine by Vehicle Make",
+                title=f"{query_name} - Average Fine by Vehicle Make",
                 labels={'vehicle_make': 'Vehicle Make', 'avg_fine': 'Average Fine ($)', 'violations': 'Number of Violations'}
             )
             fig.update_layout(height=400, xaxis_tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Show data table
-            st.dataframe(q3_data, use_container_width=True)
-            
             visualizations_shown += 1
-    
-    # Yearly trend analysis (Q4)
-    if "Q4" in st.session_state.query_results:
-        q4_data = st.session_state.query_results["Q4"]["data"]
-        if not q4_data.empty and len(q4_data) > 0:
-            st.subheader("📅 Yearly Trend Analysis")
-            
-            # Create line chart for trends
+        
+        # Yearly trend analysis (Q4 and similar)
+        elif 'year' in data.columns and 'violation_count' in data.columns:
             fig = px.line(
-                q4_data,
+                data,
                 x='year',
                 y='violation_count',
-                title="Violations Over Time",
+                title=f"{query_name} - Violations Over Time",
                 labels={'year': 'Year', 'violation_count': 'Number of Violations'}
             )
             fig.update_layout(height=400)
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Show data table
-            st.dataframe(q4_data, use_container_width=True)
-            
             visualizations_shown += 1
-    
-    # Interactive filtering (Q5)
-    if "Q5" in st.session_state.query_results:
-        q5_data = st.session_state.query_results["Q5"]["data"]
-        if not q5_data.empty and len(q5_data) > 0:
-            st.subheader("🔍 Filtered Results")
-            
-            # Create scatter plot
-            fig = px.scatter(
-                q5_data,
-                x='calculated_fine_amount',
-                y='issue_date',
-                color='fine_category',
-                hover_data=['street_name', 'vehicle_make'],
-                title="Filtered Violations",
-                labels={'calculated_fine_amount': 'Fine Amount ($)', 'issue_date': 'Issue Date'}
-            )
-            fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Show data table
-            st.dataframe(q5_data, use_container_width=True)
-            
-            visualizations_shown += 1
+        
+        # Interactive filtering (Q5 and similar)
+        elif 'fine_category' in data.columns:
+            # Check if required columns exist for scatter plot
+            if 'calculated_fine_amount' in data.columns and 'issue_date' in data.columns:
+                fig = px.scatter(
+                    data,
+                    x='calculated_fine_amount',
+                    y='issue_date',
+                    color='fine_category',
+                    hover_data=['street_name', 'vehicle_make'] if 'street_name' in data.columns and 'vehicle_make' in data.columns else None,
+                    title=f"{query_name} - Filtered Violations",
+                    labels={'calculated_fine_amount': 'Fine Amount ($)', 'issue_date': 'Issue Date'}
+                )
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+                visualizations_shown += 1
+            else:
+                # Fallback: create a bar chart for fine categories
+                if 'violation_count' in data.columns:
+                    fig = px.bar(
+                        data,
+                        x='fine_category',
+                        y='violation_count',
+                        title=f"{query_name} - Violations by Fine Category",
+                        labels={'fine_category': 'Fine Category', 'violation_count': 'Violation Count'}
+                    )
+                    fig.update_layout(height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+                    visualizations_shown += 1
+        
+        # Generic visualization for other data types
+        else:
+            # Try to create a generic bar chart if we have numeric data
+            numeric_cols = data.select_dtypes(include=['int64', 'float64']).columns
+            if len(numeric_cols) >= 2:
+                fig = px.bar(
+                    data.head(20),  # Limit to top 20 for readability
+                    x=data.columns[0],
+                    y=numeric_cols[0],
+                    title=f"{query_name} - Data Visualization",
+                    labels={data.columns[0]: data.columns[0], numeric_cols[0]: numeric_cols[0]}
+                )
+                fig.update_layout(height=400, xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+                visualizations_shown += 1
+        
+        # Always show the data table
+        st.dataframe(data, use_container_width=True)
+        st.markdown("---")
     
     # Fallback message if no visualizations were shown
     if visualizations_shown == 0:
@@ -875,68 +1077,7 @@ def create_visualizations():
         Try running the benchmark queries again or check the connection status.
         """)
 
-def explain_performance(connector: FireboltConnector):
-    """Show query execution plans and performance explanations."""
-    
-    st.markdown("### Query Performance Analysis")
-    
-    sample_query = """
-    SELECT COUNT(*), SUM(calculated_fine_amount) 
-    FROM violations 
-    WHERE street_name = 'Broadway'
-    """
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🔍 Current Query Plan")
-        if st.button("Show Execution Plan"):
-            explain_query = f"EXPLAIN {sample_query}"
-            result_df, exec_time, success = connector.execute_query(explain_query)
-            
-            if success and not result_df.empty:
-                st.text(str(result_df.iloc[0, 0]) if len(result_df.columns) > 0 else "No plan available")
-            else:
-                st.text("Query plan not available")
-    
-    with col2:
-        st.subheader("⚡ Performance Tips")
-        st.markdown("""
-        **For Production Workloads:**
-        
-        - **Sparse Indexes**: Create indexes on frequently filtered columns
-        - **Primary Index**: Choose the right primary index column
-        - **Aggregating Indexes**: Pre-compute common aggregations
-        - **Partitioning**: Partition large tables by date/category
-        
-        **Current Test Table:**
-        - Small dataset (< 10 rows)
-        - Simple structure for demonstration
-        - Perfect for testing queries
-        """)
-        
-    # Show sample performance comparison
-    st.markdown("### Performance Comparison")
-    
-    if st.button("Run Performance Test"):
-        with st.spinner("Running performance test..."):
-            # Test simple query
-            start_time = time.time()
-            df1, exec_time1, success1 = connector.execute_query("SELECT COUNT(*) FROM violations")
-            
-            # Test aggregation query
-            df2, exec_time2, success2 = connector.execute_query("SELECT street_name, COUNT(*), AVG(calculated_fine_amount) FROM violations GROUP BY street_name LIMIT 10")
-            
-            if success1 and success2:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Count Query", f"{exec_time1*1000:.1f}ms")
-                with col2:
-                    st.metric("Aggregation Query", f"{exec_time2*1000:.1f}ms")
-                
-                st.success("✅ Queries executed successfully!")
-            else:
-                st.error("❌ Performance test failed")
+
 
 if __name__ == "__main__":
     main() 
