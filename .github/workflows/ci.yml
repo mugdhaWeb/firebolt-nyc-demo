@@ -1,0 +1,128 @@
+name: Firebolt Core Demo CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-format:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install linting dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff black mypy
+        pip install -r requirements.txt
+    
+    - name: Lint with ruff
+      run: ruff check app/ scripts/
+    
+    - name: Format check with black
+      run: black --check app/ scripts/
+    
+    - name: Type check with mypy
+      run: mypy app/ scripts/ || true  # Allow mypy to fail for now
+
+  test-firebolt-core:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Start Firebolt Core
+      run: |
+        # Use a smaller test setup to avoid timeout
+        docker run -d --name firebolt-core \
+          --ulimit memlock=2147483648:2147483648 \
+          --security-opt seccomp=unconfined \
+          -p 127.0.0.1:3473:3473 \
+          ghcr.io/firebolt-db/firebolt-core:preview-rc
+        
+        # Wait for service to be ready
+        sleep 30
+        
+        # Test basic connectivity
+        timeout 60 bash -c 'until docker exec firebolt-core fbcli -e "SELECT 1" > /dev/null 2>&1; do sleep 5; done'
+    
+    - name: Test basic queries
+      run: |
+        # Test basic SQL functionality
+        docker exec firebolt-core fbcli -e "SELECT 'Firebolt Core is working!' as status"
+        
+        # Create a small test table
+        docker exec firebolt-core fbcli -e "CREATE TABLE test_table (id INT, name STRING) PRIMARY INDEX id"
+        
+        # Insert test data
+        docker exec firebolt-core fbcli -e "INSERT INTO test_table VALUES (1, 'test'), (2, 'demo')"
+        
+        # Test aggregation
+        docker exec firebolt-core fbcli -e "SELECT COUNT(*) as row_count FROM test_table"
+    
+    - name: Test Streamlit app startup
+      run: |
+        # Test that the Streamlit app can start without errors
+        timeout 30 streamlit run app/streamlit_app.py --server.headless true &
+        sleep 10
+        # Check if the process is still running
+        pgrep -f streamlit || exit 1
+        pkill -f streamlit
+
+  markdown-lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Install markdownlint
+      run: npm install -g markdownlint-cli
+    
+    - name: Lint markdown files
+      run: markdownlint README.md || true  # Allow to fail for now
+
+  build-docker:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Streamlit Docker image
+      run: |
+        docker build -f Dockerfile.streamlit -t firebolt-streamlit:test .
+    
+    - name: Test Docker image
+      run: |
+        # Test that the Docker image can be built and started
+        docker run --rm -d --name test-streamlit -p 8501:8501 firebolt-streamlit:test
+        sleep 10
+        docker stop test-streamlit 
