@@ -1,212 +1,119 @@
-# 🚗 Firebolt Core NYC Parking Demo
+# Firebolt Core NYC Parking Demo
 
-**Analyze 21.5+ million NYC parking violations with lightning-fast sub-second queries!**
+Analyze 21.5 million New York City parking violations with sub‑second queries.
 
-This demo showcases [Firebolt Core's](https://github.com/firebolt-db/firebolt-core) high-performance distributed query engine using real NYC parking violations data. Experience blazing-fast analytics on massive datasets with an interactive Streamlit interface.
+## Table of Contents
 
-## ✨ What You'll Get
+1. [Features](#features)
+2. [Prerequisites](#prerequisites)
+3. [Installation](#installation)
+4. [Usage](#usage)
 
-- 🚀 **Sub-second queries** on 21.5M+ rows of real data
-- 📊 **Interactive visualizations** with real-time filtering
-- 🏃 **Live benchmarking** with performance monitoring
-- 🎯 **5 analytical workloads** showcasing different query patterns
-- 📈 **Advanced filtering** by street, vehicle make, and fine amount
+## Features
 
-## 🎯 Quick Start (10 Minutes)
+* Sub‑second analytical queries on 21.5 million rows
+* Interactive Streamlit dashboard for ad‑hoc exploration
+* Five benchmark workloads illustrating typical analytics patterns
+* Helper scripts for setup, data loading, status checks, and cleanup
+* Real‑time visual feedback while queries run
 
-**Prerequisites:**
-- Docker Engine (16GB+ RAM recommended)
-- Python 3.11+
-- macOS, Linux, or Windows with WSL2
+## Prerequisites
 
-### Step 1: Setup Firebolt Core (2 minutes)
+* **Docker Engine** with at least 16 GB RAM
+* **Python 3.11** or later
+* macOS, Linux, or Windows 10/11 with WSL 2
+* Reliable broadband connection to pull the 4.5 GB dataset
+
+## Installation
+
+1. **Clone the repository.** Downloading the code locally lets you build the containers and run the dashboard.
+
+   ```bash
+   git clone https://github.com/firebolt-db/firebolt-nyc-demo.git
+   cd firebolt-nyc-demo
+   ```
+
+2. **Create a Python virtual environment.** Isolating dependencies prevents version conflicts with other projects.
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate           # Windows: .venv\Scripts\activate
+   ```
+
+3. **Install Python dependencies.**
+
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+4. **Start Firebolt Core.** This script launches the database container and primes it for incoming data. Once it finishes, **open a new terminal window or tab** in the same project directory for the remaining steps.
+
+   ```bash
+   chmod +x setup_core.sh
+   ./setup_core.sh
+   # Watch for: "Firebolt Core is ready!"
+   ```
+
+5. **Load the NYC parking dataset.** The dataset arrives compressed from S3, then imports into a partitioned table.
+
+   ```bash
+   chmod +x load_data.sh
+   ./load_data.sh
+   # Expect: "Data loading completed successfully!"
+   ```
+
+6. **Launch the Streamlit dashboard.** The dashboard provides visual exploration and benchmark controls.
+
+   ```bash
+   streamlit run app/streamlit_app.py
+   # Open http://localhost:8501 in your browser
+   ```
+
+### Typical Pitfalls and Quick Fixes
+
+* **Port 8501 already in use** – Another Streamlit session is running. Run `lsof -ti:8501 | xargs kill -9` then rerun.
+* **`relation violations does not exist`** – Data load failed or ran in the wrong container. Rerun `./load_data.sh` and confirm output.
+* **`firebolt-core` container exited** – Docker memory limit too low. Allocate at least 6 GB in Docker Desktop settings.
+
+## Usage
+
+### Run Benchmarks
 
 ```bash
-# Move to proper directory
-cd firebolt-nyc-demo
-
-# Make setup scripts executable
-chmod +x setup_core.sh load_data.sh check_status.sh cleanup.sh
-
-# Start Firebolt Core database
-./setup_core.sh
+./check_status.sh      # Confirms database, data, and Python env are ready
+# In the Streamlit UI, click "Run All Benchmarks"
 ```
 
-**✅ Wait for**: "Firebolt Core is ready!" message
+The dashboard streams results every second so you can watch latency drop as indexes kick in.
 
-Open a seperate terminal
+### Explore the Data
 
-### Step 2: Setup Python Environment (2 minutes)
+* Use the sidebar filters (street, vehicle make, fine amount) and observe instant updates.
+* Click any bar or line in the charts to drill into raw rows behind that aggregate.
+* Download a slice by selecting “Export to CSV” in the Data tab.
 
-```bash
-# Create virtual environment
-python3 -m venv .venv
+### Direct SQL Access
 
-# Activate virtual environment
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Step 3: Load Data (3 minutes)
+Run ad‑hoc queries without leaving your terminal.
 
 ```bash
-# Load 21.5M NYC parking violations from S3
-./load_data.sh
-```
-
-**✅ Wait for**: "Data loading completed successfully!"
-
-### Step 4: Launch Streamlit (1 minute)
-
-```bash
-# Start the web interface
-streamlit run app/streamlit_app.py
-```
-
-**✅ Open**: http://localhost:8501
-
-## 🚀 You're Ready!
-
-Your system now has:
-- **21,563,502 NYC parking violations** loaded and indexed
-- **Sub-second query performance** on massive datasets
-- **Interactive web interface** for exploration and benchmarking
-
-## 📊 What You Can Do
-
-### 🏃 Run Benchmarks
-Execute all 5 benchmark queries and see performance metrics:
-- **Q1**: Fiscal year aggregation (~50ms)
-- **Q2**: Top streets by revenue (~150ms)
-- **Q3**: Vehicle make fine analysis (~300ms)
-- **Q4**: Hourly violation patterns (~120ms)
-- **Q5**: Interactive filtering (~250ms)
-
-### 📈 Explore Data
-- **Filter by Street**: Choose from 11,000+ NYC streets
-- **Filter by Vehicle**: Honda, Toyota, Ford, BMW, and more
-- **Filter by Fine Amount**: $0-$200 range slider
-- **Real-time Results**: All filters work together instantly
-
-### 🔍 Browse Raw Data
-- View latest violations in real-time
-- Explore dataset metadata and statistics
-- Understand data quality and coverage
-
-## 🔧 Helper Scripts
-
-### Check System Status
-```bash
-./check_status.sh
-```
-Verifies that Firebolt Core is running, data is loaded, and Python environment is ready.
-
-### Clean Up Everything
-```bash
-./cleanup.sh
-```
-Removes all containers, data, and virtual environment for a fresh start.
-
-### Reload Data
-```bash
-./load_data.sh
-```
-Drops and reloads the violations table with fresh data from S3.
-
-
-
-## 🐛 Troubleshooting
-
-### "Firebolt Core is not running"
-```bash
-# Check container status
-docker ps | grep firebolt-core
-
-# If not running, restart
-./setup_core.sh
-```
-
-### "relation violations does not exist"
-```bash
-# Load the data
-./load_data.sh
-
-# Or check if container has persistent data
-docker exec firebolt-core fb -C -c "SHOW TABLES"
-```
-
-### "Port 8501 is already in use"
-```bash
-# Find and kill the process
-lsof -ti:8501 | xargs kill -9
-
-# Or use a different port
-streamlit run app/streamlit_app.py --server.port=8502
-```
-
-### Virtual Environment Issues
-```bash
-# Remove and recreate
-rm -rf .venv
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Complete Reset
-```bash
-# Clean everything and start over
-./cleanup.sh
-
-# Then follow the setup steps again
-./setup_core.sh
-# ... etc
-```
-
-## 🔍 Advanced Usage
-
-### Query the Database Directly
-```bash
-# Interactive SQL shell
+# Open an interactive shell
 docker exec -it firebolt-core fb -C
 
-# Single query
-docker exec firebolt-core fb -C -c "SELECT COUNT(*) FROM violations"
+# Example: total tickets in 2024
+SELECT COUNT(*)
+FROM violations
+WHERE issue_date BETWEEN '2024-01-01' AND '2024-12-31';
 ```
 
-### Performance Monitoring
+### Cleanup
+
+Free disk space and stop all containers when finished.
+
 ```bash
-# Check query performance
-docker exec firebolt-core fb -C -c "
-SELECT
-    COUNT(*) as total_violations,
-    AVG(calculated_fine_amount) as avg_fine,
-    COUNT(DISTINCT street_name) as unique_streets
-FROM violations"
+chmod +x cleanup.sh
+./cleanup.sh
 ```
 
-### Export Data
-```bash
-# Export to CSV
-docker exec firebolt-core fb -C -c "
-SELECT * FROM violations
-WHERE issue_date >= '2023-01-01'
-LIMIT 1000" -f CSV > sample_data.csv
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your improvements
-4. Test with `./check_status.sh`
-5. Submit a pull request
-
-## 📚 Learn More
-
-- [Firebolt Core Documentation](https://docs.firebolt.io/firebolt-core)
-- [Firebolt SQL Reference](https://docs.firebolt.io/sql_reference/)
-- [GitHub Repository](https://github.com/firebolt-db/firebolt-core)
-- [Community Discord](https://discord.gg/UpMPDHActM)
+Running cleanup is helpful on shared machines so teammates start with a clean slate.

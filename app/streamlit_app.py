@@ -258,50 +258,60 @@ def get_firebolt_connector():
 # Cache filter data for performance
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_filter_data(_connector: FireboltConnector) -> Dict:
-    """Get all filter data in one go and cache it."""
+    """Get all filter data in one go and cache it. Returns distinct streets, fine amounts, and vehicle makes without artificial limits."""
     
-    # Get all filter data efficiently
     filter_data = {
         'streets': [],
         'amounts': [],
         'cars': []
     }
     
-    # Get streets
+    # Get streets – use index on street_name; no LIMIT so we fetch all distinct values
     try:
-        df, _, success = _connector.execute_query("SELECT DISTINCT street_name FROM violations WHERE street_name IS NOT NULL AND street_name != '' ORDER BY street_name LIMIT 1000")
+        query = (
+            "SELECT DISTINCT street_name FROM violations "
+            "WHERE street_name IS NOT NULL AND street_name != '' "
+            "ORDER BY street_name"
+        )
+        df, _, success = _connector.execute_query(query)
         if success and not df.empty:
             filter_data['streets'] = df['street_name'].tolist()
     except Exception as e:
         logger.error(f"Error fetching streets: {e}")
     
-    # Get amounts
+    # Get amounts – fetch entire distinct list for slider range
     try:
-        df, _, success = _connector.execute_query("SELECT DISTINCT calculated_fine_amount FROM violations WHERE calculated_fine_amount IS NOT NULL AND calculated_fine_amount > 0 ORDER BY calculated_fine_amount LIMIT 1000")
+        query = (
+            "SELECT DISTINCT calculated_fine_amount FROM violations "
+            "WHERE calculated_fine_amount IS NOT NULL AND calculated_fine_amount > 0 "
+            "ORDER BY calculated_fine_amount"
+        )
+        df, _, success = _connector.execute_query(query)
         if success and not df.empty:
             filter_data['amounts'] = df['calculated_fine_amount'].tolist()
     except Exception as e:
         logger.error(f"Error fetching amounts: {e}")
-    
-    # Get cars
+
+    # Get cars – remove occurrence threshold so all makes appear
     try:
-        df, _, success = _connector.execute_query("""
-            SELECT vehicle_make
-            FROM violations 
-            WHERE vehicle_make IS NOT NULL 
-                AND LENGTH(vehicle_make) >= 3
-                AND vehicle_make != ''
-            GROUP BY vehicle_make
-            HAVING COUNT(*) >= 1000
-            ORDER BY COUNT(*) DESC
-            LIMIT 50
-        """)
+        query = (
+            "SELECT DISTINCT vehicle_make FROM violations "
+            "WHERE vehicle_make IS NOT NULL AND LENGTH(vehicle_make) >= 2 AND vehicle_make != '' "
+            "ORDER BY vehicle_make"
+        )
+        df, _, success = _connector.execute_query(query)
         if success and not df.empty:
             filter_data['cars'] = df['vehicle_make'].tolist()
     except Exception as e:
         logger.error(f"Error fetching cars: {e}")
     
     return filter_data
+
+# ------------------------------- CACHE WARM-UP --------------------------------
+# Pre-load connector & filter caches so the first user sees an already-warmed UI.
+_firebolt_connector = get_firebolt_connector()
+get_filter_data(_firebolt_connector)
+# ------------------------------------------------------------------------------
 
 def get_available_streets(connector: FireboltConnector) -> List[str]:
     """Get list of available street names from the database."""
@@ -492,10 +502,7 @@ def main():
     if connector.test_connection():
         st.sidebar.success("✅ Connected to Firebolt Core")
         
-        # Add refresh button for cache
-        if st.sidebar.button("🔄 Refresh Cache", help="Clear cache and reload filter data"):
-            st.cache_data.clear()
-            st.rerun()
+        # The cache now self-invalidates via TTL so the manual refresh button is no longer needed.
         
         # Sidebar filters (only show if connected)
         st.sidebar.header("🎛️ Query Filters")
