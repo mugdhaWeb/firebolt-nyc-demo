@@ -273,9 +273,12 @@ def get_filter_data(_connector: FireboltConnector) -> Dict:
             "WHERE street_name IS NOT NULL AND street_name != '' "
             "ORDER BY street_name"
         )
-        df, _, success = _connector.execute_query(query)
+        df, exec_time, success = _connector.execute_query(query)
         if success and not df.empty:
             filter_data['streets'] = df['street_name'].tolist()
+            logger.info(f"✅ Streets loaded: {len(filter_data['streets'])} items in {exec_time*1000:.1f}ms")
+        else:
+            logger.warning(f"⚠️  Street query failed or returned empty results. Success: {success}")
     except Exception as e:
         logger.error(f"Error fetching streets: {e}")
     
@@ -286,9 +289,12 @@ def get_filter_data(_connector: FireboltConnector) -> Dict:
             "WHERE calculated_fine_amount IS NOT NULL AND calculated_fine_amount > 0 "
             "ORDER BY calculated_fine_amount"
         )
-        df, _, success = _connector.execute_query(query)
+        df, exec_time, success = _connector.execute_query(query)
         if success and not df.empty:
             filter_data['amounts'] = df['calculated_fine_amount'].tolist()
+            logger.info(f"✅ Amounts loaded: {len(filter_data['amounts'])} items in {exec_time*1000:.1f}ms")
+        else:
+            logger.warning(f"⚠️  Amount query failed or returned empty results. Success: {success}")
     except Exception as e:
         logger.error(f"Error fetching amounts: {e}")
 
@@ -299,18 +305,19 @@ def get_filter_data(_connector: FireboltConnector) -> Dict:
             "WHERE vehicle_make IS NOT NULL AND LENGTH(vehicle_make) >= 2 AND vehicle_make != '' "
             "ORDER BY vehicle_make"
         )
-        df, _, success = _connector.execute_query(query)
+        df, exec_time, success = _connector.execute_query(query)
         if success and not df.empty:
             filter_data['cars'] = df['vehicle_make'].tolist()
+            logger.info(f"✅ Vehicle makes loaded: {len(filter_data['cars'])} items in {exec_time*1000:.1f}ms")
+        else:
+            logger.warning(f"⚠️  Vehicle make query failed or returned empty results. Success: {success}")
     except Exception as e:
         logger.error(f"Error fetching cars: {e}")
     
     return filter_data
 
 # ------------------------------- CACHE WARM-UP --------------------------------
-# Pre-load connector & filter caches so the first user sees an already-warmed UI.
-_firebolt_connector = get_firebolt_connector()
-get_filter_data(_firebolt_connector)
+# Cache warm-up will happen in main() to ensure proper timing
 # ------------------------------------------------------------------------------
 
 def get_available_streets(connector: FireboltConnector) -> List[str]:
@@ -502,6 +509,13 @@ def main():
     if connector.test_connection():
         st.sidebar.success("✅ Connected to Firebolt Core")
         
+        # Ensure cache is warmed up on first connection
+        if 'cache_warmed' not in st.session_state:
+            with st.spinner("Initializing filters..."):
+                # Pre-warm the cache to ensure fast filter loading
+                get_filter_data(connector)
+                st.session_state.cache_warmed = True
+        
         # The cache now self-invalidates via TTL so the manual refresh button is no longer needed.
         
         # Sidebar filters (only show if connected)
@@ -511,6 +525,21 @@ def main():
         available_streets = get_available_streets(connector)
         available_amounts = get_available_amounts(connector)
         available_cars = get_available_cars(connector)
+        
+        # Debug: Log filter data loading status
+        if len(available_streets) > 0:
+            logger.info(f"✅ Loaded {len(available_streets)} street names")
+        else:
+            logger.warning("⚠️  No street names loaded - checking cache...")
+            # Force refresh cache if no streets are loaded
+            st.cache_data.clear()
+            available_streets = get_available_streets(connector)
+            logger.info(f"🔄 After cache refresh: {len(available_streets)} street names")
+            
+        if len(available_cars) > 0:
+            logger.info(f"✅ Loaded {len(available_cars)} vehicle makes")
+        else:
+            logger.warning("⚠️  No vehicle makes loaded")
         
         # Street filter with selectbox
         street_options = ["All Streets"] + available_streets
