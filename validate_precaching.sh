@@ -27,8 +27,8 @@ chmod +x test_precache_validation.py
 echo "🧪 Running Precache-QA-Bot validation..."
 echo ""
 
-# Execute the test with timeout
-timeout 600 python3 test_precache_validation.py
+# Execute the test (timeout not available on macOS by default)
+python3 test_precache_validation.py
 exit_code=$?
 
 echo ""
