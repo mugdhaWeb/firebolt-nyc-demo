@@ -12,7 +12,12 @@ fi
 
 # Install Firebolt Core using the official installer
 echo "📦 Installing Firebolt Core..."
-bash <(curl -s https://get-core.firebolt.io/)
+if [[ "$1" == "--auto-run" ]]; then
+    echo "🤖 Auto-run mode: Installing Firebolt Core automatically..."
+    bash <(curl -s https://get-core.firebolt.io/) --auto-run
+else
+    bash <(curl -s https://get-core.firebolt.io/)
+fi
 
 # Wait for the service to be ready
 echo "⏳ Waiting for Firebolt Core to be ready..."

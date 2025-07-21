@@ -822,7 +822,8 @@ def main():
                 if latest_result['success'] and not latest_result['data'].empty:
                     st.dataframe(latest_result['data'], use_container_width=True)
                 elif latest_result['success'] and latest_result['data'].empty:
-                    st.info("Query executed successfully but returned no results.")
+                    # Inform user when the query ran successfully but returned an empty set
+                    st.info("No rows were returned for this query.")
                     if latest_query.startswith("CQ_") and latest_result.get('filters_applied'):
                         st.info("💡 **Tip:** Try unchecking 'Apply current filters' if you're getting no results.")
                 else:
